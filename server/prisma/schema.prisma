@@ -1,0 +1,256 @@
+// PaceFrame AI — Prisma Schema (PRD Section 5.3)
+// PostgreSQL via Supabase | JavaScript (no TypeScript)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_DIRECT")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum SessionType {
+  EASY_RECOVERY
+  INTERVAL
+  TEMPO
+  LONG_RUN
+  STRENGTH_MOBILITY
+  RACE
+  REST
+}
+
+enum ScheduleStatus {
+  planned
+  completed
+  skipped
+  modified
+}
+
+enum SafetyStateEnum {
+  NORMAL
+  CAUTION
+  LOCKED
+  MEDICAL_HOLD
+  MODIFIED
+  STOP
+  EMERGENCY
+}
+
+enum MutationSource {
+  Assisted
+  Manual
+  System
+}
+
+// ─────────────────────────────────────────────
+// ATHLETE PROFILE (PRD FR-01, Section 5.3)
+// ─────────────────────────────────────────────
+
+model AthleteProfile {
+  id                   String   @id @default(uuid())
+  full_name            String
+  age                  Int?
+  gender               String?
+  height_cm            Float?
+  weight_kg            Float?
+  resting_hr           Int?
+  
+  // Goals
+  goal_stage1          String?
+  goal_stage1_pace     String?
+  goal_stage2          String?
+  
+  // Baseline
+  pb_5k_sec            Int?
+  baseline_easy_pace   String?
+  baseline_weekly_km   Float?
+  
+  // Training days bitmask (0=Sun,...6=Sat)
+  training_days        Int[]    @default([])
+  strict_day_lock      Boolean  @default(false)
+  
+  // PAR-Q consent
+  parq_consent         Boolean  @default(false)
+  parq_answered_at     DateTime?
+  
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  training_plans       TrainingPlan[]
+  workout_logs         WorkoutLog[]
+  safety_states        SafetyState[]
+  chat_messages        ChatMessage[]
+
+  @@map("athlete_profiles")
+}
+
+// ─────────────────────────────────────────────
+// TRAINING PLAN (PRD FR-02)
+// ─────────────────────────────────────────────
+
+model TrainingPlan {
+  id                   String   @id @default(uuid())
+  athlete_id           String
+  name                 String
+  phase_number         Int      @default(1)
+  phase_name           String
+  target_milestone     String
+  total_weeks          Int      @default(12)
+  is_active            Boolean  @default(true)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  athlete              AthleteProfile   @relation(fields: [athlete_id], references: [id], onDelete: Cascade)
+  schedules            TrainingSchedule[]
+
+  @@map("training_plans")
+}
+
+// ─────────────────────────────────────────────
+// TRAINING SCHEDULE (PRD FR-02, Section 5.3)
+// ─────────────────────────────────────────────
+
+model TrainingSchedule {
+  id                   String         @id @default(uuid())
+  plan_id              String
+  day_name             String
+  week_number          Int            @default(1)
+  scheduled_date       DateTime?
+  session_type         SessionType
+  title                String
+  target_distance_km   Float          @default(0)
+  target_pace          String?
+  target_rpe           String?
+  instructions         String?
+  strength_addon       String?
+  status               ScheduleStatus @default(planned)
+  badge                String?
+  created_at           DateTime       @default(now())
+  updated_at           DateTime       @updatedAt
+
+  plan                 TrainingPlan           @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+  workout_logs         WorkoutLog[]
+  mutation_logs        ScheduleMutationLog[]
+
+  @@map("training_schedules")
+}
+
+// ─────────────────────────────────────────────
+// WORKOUT LOG (PRD FR-03, Section 5.3)
+// ─────────────────────────────────────────────
+
+model WorkoutLog {
+  id                    String   @id @default(uuid())
+  athlete_id            String
+  schedule_id           String?
+  logged_date           DateTime @default(now())
+  actual_distance_km    Float
+  actual_duration_sec   Int
+  avg_pace_sec_km       Int?
+  formatted_pace        String?
+  avg_hr                Int?
+  cadence               Int?
+  rpe_score             Float
+  muscle_soreness       Float    @default(0)
+  localized_pain        Float    @default(0)
+  pain_location         String?
+  sharp_pain            Boolean  @default(false)
+  functional_limitation Boolean  @default(false)
+  chest_pain            Boolean  @default(false)
+  dizziness             Boolean  @default(false)
+  session_stopped_early Boolean  @default(false)
+  fatigue_score         Float    @default(0)
+  sleep_hours           Float?
+  notes                 String?
+  screenshot_paths      String[] @default([])
+  ai_evaluation_md      String?
+  safety_state_at_log   String?
+  created_at            DateTime @default(now())
+
+  athlete              AthleteProfile    @relation(fields: [athlete_id], references: [id], onDelete: Cascade)
+  schedule             TrainingSchedule? @relation(fields: [schedule_id], references: [id])
+
+  @@map("workout_logs")
+}
+
+// ─────────────────────────────────────────────
+// SCHEDULE MUTATION LOG (PRD FR-05)
+// ─────────────────────────────────────────────
+
+model ScheduleMutationLog {
+  id               String         @id @default(uuid())
+  schedule_id      String
+  source           MutationSource @default(Assisted)
+  previous_values  Json
+  new_values       Json
+  reason           String?
+  approved_at      DateTime?
+  rejected_at      DateTime?
+  undone_at        DateTime?
+  created_at       DateTime       @default(now())
+
+  schedule         TrainingSchedule @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+
+  @@map("schedule_mutation_logs")
+}
+
+// ─────────────────────────────────────────────
+// SAFETY STATE HISTORY (PRD SR-01..SR-08)
+// ─────────────────────────────────────────────
+
+model SafetyState {
+  id          String          @id @default(uuid())
+  athlete_id  String
+  state       SafetyStateEnum @default(NORMAL)
+  rule_id     String?
+  title       String?
+  reason      String?
+  action      String?
+  advice      String?
+  resolved_at DateTime?
+  created_at  DateTime        @default(now())
+
+  athlete     AthleteProfile  @relation(fields: [athlete_id], references: [id], onDelete: Cascade)
+
+  @@map("safety_states")
+}
+
+// ─────────────────────────────────────────────
+// CHAT MESSAGES (PRD FR-04)
+// ─────────────────────────────────────────────
+
+model ChatMessage {
+  id                   String   @id @default(uuid())
+  athlete_id           String
+  role                 String
+  content              String
+  proposed_mutation_id String?
+  created_at           DateTime @default(now())
+
+  athlete              AthleteProfile @relation(fields: [athlete_id], references: [id], onDelete: Cascade)
+
+  @@map("chat_messages")
+}
+
+// ─────────────────────────────────────────────
+// AI CALL LOG (observability)
+// ─────────────────────────────────────────────
+
+model AiCallLog {
+  id                String   @id @default(uuid())
+  call_type         String
+  model_used        String
+  prompt_tokens     Int?
+  completion_tokens Int?
+  latency_ms        Int?
+  error_message     String?
+  created_at        DateTime @default(now())
+
+  @@map("ai_call_logs")
+}
